@@ -1,0 +1,80 @@
+[1/11] Performing build step for 'bootloader'
+[1/1] cd /home/lagoria/workspace/esp/project/esp32s3/master/build/bootloader/esp-idf/esptool_py && /home/lagoria/.espressif/python_env/idf5.0_py3.10_env/bin/python /home/lagoria/workspace/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 /home/lagoria/workspace/esp/project/esp32s3/master/build/bootloader/bootloader.bin
+Bootloader binary size 0x5030 bytes. 0x2fd0 bytes (37%) free.
+[2/9] Building C object esp-idf/lvgl_esp32_drivers/CMakeFiles/__idf_lvgl_esp32_drivers.dir/lvgl_tft/disp_spi.c.obj
+/home/lagoria/workspace/esp/project/esp32s3/master/components/lvgl_esp32_drivers/lvgl_tft/disp_spi.c:302:1: warning: ignoring attribute 'section (".iram1.3")' because it conflicts with previous 'section (".iram1.2")' [-Wattributes]
+  302 | {
+      | ^
+/home/lagoria/workspace/esp/project/esp32s3/master/components/lvgl_esp32_drivers/lvgl_tft/disp_spi.c:88:23: note: previous declaration here
+   88 | static void IRAM_ATTR spi_ready(spi_transaction_t *trans);
+      |                       ^~~~~~~~~
+/home/lagoria/workspace/esp/project/esp32s3/master/components/lvgl_esp32_drivers/lvgl_tft/disp_spi.c:301:23: warning: 'spi_ready' defined but not used [-Wunused-function]
+  301 | static void IRAM_ATTR spi_ready(spi_transaction_t *trans)
+      |                       ^~~~~~~~~
+[3/9] Building C object esp-idf/lvgl_esp32_drivers/CMakeFiles/__idf_lvgl_esp32_drivers.dir/lvgl_tft/ili9488.c.obj
+[4/9] Linking C static library esp-idf/lvgl_esp32_drivers/liblvgl_esp32_drivers.a
+[5/9] Generating ld/sections.ld
+[6/9] Linking CXX executable master.elf
+[7/9] Generating binary image from built executable
+esptool.py v4.5.1
+Creating esp32s3 image...
+Merged 2 ELF sections
+Successfully created esp32s3 image.
+Generated /home/lagoria/workspace/esp/project/esp32s3/master/build/master.bin
+[8/9] cd /home/lagoria/workspace/esp/project/esp32s3/master/build/esp-idf/esptool_py && /home/lagoria/.espressif/python_env/idf5.0_py3.10_env/bin/python /home/lagoria/workspace/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /home/lagoria/workspace/esp/project/esp32s3/master/build/partition_table/partition-table.bin /home/lagoria/workspace/esp/project/esp32s3/master/build/master.bin
+master.bin binary size 0x77850 bytes. Smallest app partition is 0x1e7800 bytes. 0x16ffb0 bytes (75%) free.
+[8/9] cd /home/lagoria/workspace/esp/esp-idf/components/esptool_py && /usr/bin/cmake -D IDF_PATH=/home/lagoria/workspace/esp/esp-idf -D "SERIAL_TOOL=/home/lagoria/.espressif/python_env/idf5.0_py3.10_env/bin/python;;/home/lagoria/workspace/esp/esp-idf/components/esptool_py/esptool/esptool.py;--chip;esp32s3" -D "SERIAL_TOOL_ARGS=--before=default_reset;--after=hard_reset;write_flash;@flash_args" -D WORKING_DIRECTORY=/home/lagoria/workspace/esp/project/esp32s3/master/build -P /home/lagoria/workspace/esp/esp-idf/components/esptool_py/run_serial_tool.cmake
+esptool esp32s3 -p /dev/ttyUSB0 -b 460800 --before=default_reset --after=hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 8MB 0x0 bootloader/bootloader.bin 0x10000 master.bin 0x8000 partition_table/partition-table.bin 0xd000 ota_data_initial.bin
+esptool.py v4.5.1
+Serial port /dev/ttyUSB0
+Connecting....
+Chip is ESP32-S3 (revision v0.1)
+Features: WiFi, BLE
+Crystal is 40MHz
+MAC: 34:85:18:91:a8:3c
+Uploading stub...
+Running stub...
+Stub running...
+Changing baud rate to 460800
+Changed.
+Configuring flash size...
+Flash will be erased from 0x00000000 to 0x00005fff...
+Flash will be erased from 0x00010000 to 0x00087fff...
+Flash will be erased from 0x00008000 to 0x00008fff...
+Flash will be erased from 0x0000d000 to 0x0000efff...
+Compressed 20528 bytes to 13057...
+Writing at 0x00000000... (100 %)
+Wrote 20528 bytes (13057 compressed) at 0x00000000 in 0.6 seconds (effective 284.1 kbit/s)...
+Hash of data verified.
+Compressed 489552 bytes to 287986...
+Writing at 0x00010000... (5 %)
+Writing at 0x000199cf... (11 %)
+Writing at 0x00025a52... (16 %)
+Writing at 0x0002c021... (22 %)
+Writing at 0x00031d42... (27 %)
+Writing at 0x00037ea1... (33 %)
+Writing at 0x0003d9f2... (38 %)
+Writing at 0x0004334c... (44 %)
+Writing at 0x00048b23... (50 %)
+Writing at 0x0004e8c4... (55 %)
+Writing at 0x000559e2... (61 %)
+Writing at 0x0005b58f... (66 %)
+Writing at 0x00060c0c... (72 %)
+Writing at 0x00066d2b... (77 %)
+Writing at 0x0006cd85... (83 %)
+Writing at 0x00075885... (88 %)
+Writing at 0x0007dc24... (94 %)
+Writing at 0x00083ef2... (100 %)
+Wrote 489552 bytes (287986 compressed) at 0x00010000 in 6.6 seconds (effective 593.8 kbit/s)...
+Hash of data verified.
+Compressed 3072 bytes to 127...
+Writing at 0x00008000... (100 %)
+Wrote 3072 bytes (127 compressed) at 0x00008000 in 0.0 seconds (effective 502.8 kbit/s)...
+Hash of data verified.
+Compressed 8192 bytes to 31...
+Writing at 0x0000d000... (100 %)
+Wrote 8192 bytes (31 compressed) at 0x0000d000 in 0.1 seconds (effective 788.4 kbit/s)...
+Hash of data verified.
+
+Leaving...
+Hard resetting via RTS pin...

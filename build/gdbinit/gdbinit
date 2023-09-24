@@ -1,0 +1,4 @@
+
+source /home/lagoria/workspace/esp/project/esp32s3/master/build/gdbinit/py_extensions
+source /home/lagoria/workspace/esp/project/esp32s3/master/build/gdbinit/symbols
+source /home/lagoria/workspace/esp/project/esp32s3/master/build/gdbinit/connect

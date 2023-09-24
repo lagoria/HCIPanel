@@ -1,0 +1,7 @@
+
+# Add Python GDB extensions
+python
+import sys
+sys.path = ['/home/lagoria/workspace/esp/esp-idf/tools', '/usr/lib/python310.zip', '/usr/lib/python3.10', '/usr/lib/python3.10/lib-dynload', '/home/lagoria/.espressif/python_env/idf5.0_py3.10_env/lib/python3.10/site-packages', '/home/lagoria/workspace/esp/esp-idf/tools/idf_py_actions']
+import freertos_gdb
+end

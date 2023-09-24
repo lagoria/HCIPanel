@@ -1,0 +1,11 @@
+CMake Error at /home/lagoria/workspace/esp/esp-idf/tools/cmake/component.cmake:312 (message):
+  Include directory
+  '/home/lagoria/workspace/esp/project/esp32s3/master/components/lvgl/demos'
+  is not a directory.
+Call Stack (most recent call first):
+  /home/lagoria/workspace/esp/esp-idf/tools/cmake/component.cmake:486 (__component_add_include_dirs)
+  components/lvgl/env_support/cmake/esp.cmake:43 (idf_component_register)
+  components/lvgl/CMakeLists.txt:10 (include)
+
+
+ninja: error: rebuilding 'build.ninja': subcommand failed
