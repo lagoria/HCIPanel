@@ -12,4 +12,4 @@ set(EXTRA_COMPONENT_DIRS
 
 add_compile_options(-fdiagnostics-color=always)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(master)
+project(hci_controller)
