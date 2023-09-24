@@ -1,6 +1,0 @@
-CMake Error at run_serial_tool.cmake:55 (message):
-  
-  /home/lagoria/.espressif/python_env/idf5.0_py3.10_env/bin/python;;/home/lagoria/workspace/esp/esp-idf/components/esptool_py/esptool/esptool.py;--chip;esp32s3
-  failed
-
-
