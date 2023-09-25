@@ -47,6 +47,12 @@ SOFTWARE.
 		#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 3, 0)
 			#define HAS_CLK_FLAGS
 		#endif
+		/* ESP-IDF v5.1 Define */
+		#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
+			#define I2C_NUM_MAX		(2)
+			#define I2C_NUM_0		(0)
+			#define I2C_NUM_1		(1)
+		#endif
 	#endif
 #endif
 
