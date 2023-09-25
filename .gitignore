@@ -3,3 +3,6 @@ build/
 
 # VS code Settings
 .vscode/
+
+#SDK old configure
+sdkconfig.old
