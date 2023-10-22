@@ -14,12 +14,12 @@
 #define IMAGE_BUFFER_SIZE           24 * 1024
 
 /*----wifi_sta configure----*/
-#define WIFI_AP_SSID		    "ESP32_SOFTAP"			// WIFI 网络名称
-#define WIFI_AP_PAS			    "3524791358"			// WIFI 密码
+#define WIFI_AP_SSID		    "ESP-SOFTAP"			// WIFI 网络名称
+#define WIFI_AP_PAS			    "3325035137"			// WIFI 密码
 #define WIFI_MAXIMUM_RETRY      100                     // WiFi连接次数
 
 /*----app_gatts configure-----*/
-#define BLE_DEVICE_NAME         "ESP32_MASTER"
+#define BLE_DEVICE_NAME         "HCIPanel"
 
 /*------camera configure-------*/
 #define CAMERA_DEVICE       "ESP32-CAM"
