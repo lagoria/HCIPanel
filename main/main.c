@@ -15,8 +15,8 @@
 #include "lvgl.h"
 #include "lvgl_helpers.h"
 #include "lv_port_disp.h"
-#include "wifi_sta.h"
-#include "sock_client.h"
+#include "wifi_wrapper.h"
+#include "socket_wrapper.h"
 #include "app_config.h"
 
 static const char *TAG = "main";
@@ -26,8 +26,7 @@ static EventGroupHandle_t app_event_group = NULL;
 static QueueHandle_t sock_queue = NULL;
 static uint8_t local_device_id = FRAME_INVALID_ID;
 static uint8_t camera_id = FRAME_INVALID_ID;
-static uint8_t *rx_buffer = NULL;
-static uint8_t *tx_buffer = NULL;
+static uint8_t *tx_rx_buffer = NULL;
 static uint8_t *image_buffer = NULL;
 uint32_t image_size = 0;
 #define SERVER_READY_BIT    BIT0        // 服务器状态位
@@ -35,66 +34,69 @@ uint32_t image_size = 0;
 #define CAMERA_DATA_BIT     BIT2
 
 
-static void tcp_sock_recv_callback(client_sock_data_t info)
+int data_frame_send(int sock, uint8_t *frame, frame_type_t type, uint8_t target_id, 
+                    uint8_t local_id, uint32_t len, uint8_t *data)
 {
-    static uint32_t offset = 0;
-    static sock_package_info_t pack = {0};
-    if (rx_buffer == NULL || pack.frame.length > APP_TCP_RX_BUF_LEN) return;
+    frame[FRAME_HEAD_BIT] = FRAME_HEAD;
+    frame[FRAME_TYPE_BIT] = type;
+    frame[FRAME_TARGET_BIT] = target_id;
+    frame[FRAME_LOCAL_BIT] = local_id;
+    *(uint32_t *)&frame[FRAME_LENGTH_BIT] = len;
+    memcpy(&frame[FRAME_DATA_BIT], data, len);
+    return (socket_send(sock, frame, len + FRAME_HEADER_LEN));
+}
 
-    /* data frame parse*/
-    if (info.data[FRAME_HEAD_BIT] == FRAME_HEAD && offset == 0) {
-        /* package of frame head */
-        pack.frame = *(frame_header_info_t *)info.data;
-        memcpy(rx_buffer, &info.data[FRAME_DATA_BIT], info.len - FRAME_HEADER_LEN);
-        offset = info.len - FRAME_HEADER_LEN;
-    } else {
-        if (offset == 0) {
-            ESP_LOGE(TAG, "frame invalid");
-            memset(&pack, 0, sizeof(pack));
-            return ;
-        }
-        /* compose package*/
-        memcpy(&rx_buffer[offset], info.data, info.len);
-        offset += info.len;
+static void softap_server_connect_callback(socket_connect_info_t info)
+{
+    /*  注册身份  */
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, CMD_KEY_COMMAND, CMD_VALUE_REGISTER);
+    cJSON_AddStringToObject(json, CMD_KEY_NAME, LOCAL_DEVICE_MARK);
+    char *json_str = cJSON_PrintUnformatted(json);
+    int len = data_frame_send(info.socket, tx_rx_buffer, FRAME_TYPE_DIRECT, FRAME_SERVER_ID, FRAME_INVALID_ID,
+                                strlen(json_str) + 1, (uint8_t *)json_str);
+    if (len < 0) {
+        ESP_LOGE(TAG, "Error occurred during socket_send");
     }
+    ESP_LOGI(TAG, "Written: %.*s", len, json_str);
+    cJSON_Delete(json);
+    free(json_str);
+}
 
-    /* package complete*/
-    if (offset >= pack.frame.length) {
-        offset = 0;
-        pack.len = pack.frame.length;
-        pack.data = rx_buffer;
-        pack.sock = info.sock;
-
-        // 将数据送入数据队列
-        xQueueSend(sock_queue, &pack, 10 / portTICK_PERIOD_MS);
-    }
+static void softap_server_recv_callback(tcp_socket_info_t info)
+{
+    tcp_socket_info_t sock_info = info;
+    memcpy(tx_rx_buffer, info.data, info.len);
+    sock_info.data = tx_rx_buffer;
+    // 将数据送入数据队列
+    xQueueSend(sock_queue, &sock_info, 10 / portTICK_PERIOD_MS);
 }
 
 static void tcp_sock_handle_task(void *arg)
 {
-    sock_package_info_t sock_info;
-    rx_buffer = (uint8_t *)heap_caps_malloc(APP_TCP_RX_BUF_LEN, MALLOC_CAP_SPIRAM);
-    if (rx_buffer == NULL) {
-        ESP_LOGE(TAG, "rx malloc failed!");
-        goto over;
-    }
-    tx_buffer = (uint8_t *)heap_caps_malloc(APP_TCP_TX_BUF_LEN, MALLOC_CAP_SPIRAM);
-    if (tx_buffer == NULL) {
-        ESP_LOGE(TAG, "tx malloc failed!");
-        goto over;
-    }
+    tcp_socket_info_t sock_info;
     while (1) {
         /* wait for queue */
         xQueueReceive(sock_queue, &sock_info, portMAX_DELAY);
-    
-        switch (sock_info.frame.type) {
-            case FRAME_TYPE_RESPOND: {
-                tcp_socket = sock_info.sock;
-                local_device_id = sock_info.frame.goal;
-                sock_info.data[sock_info.len] = '\0';
-                ESP_LOGI(TAG, "[sock]: %d byte respond %s", sock_info.len, (char *)sock_info.data);
 
-                cJSON *root = cJSON_Parse((char *)sock_info.data);  // 解析JSON字符串
+        uint8_t *recv_data = NULL;      // 接收的数据指针
+        int recv_len = 0;               // 接收数据长度
+        /* data frame parse*/
+        frame_header_info_t frame = *(frame_header_info_t *)sock_info.data;
+        if (frame.head == FRAME_HEAD && frame.length == sock_info.len - FRAME_HEADER_LEN) {
+            recv_data = &sock_info.data[FRAME_DATA_BIT];
+            recv_len = frame.length;
+        }
+        if (recv_data == NULL) continue;
+        sock_info.data[sock_info.len] = '\0';
+        ESP_LOGI(TAG, "[sock]: %d byte received %s", recv_len, (char *)recv_data);
+    
+        switch (frame.type) {
+            case FRAME_TYPE_RESPOND: {
+                tcp_socket = sock_info.socket;
+                local_device_id = frame.goal;
+
+                cJSON *root = cJSON_Parse((char *)recv_data);  // 解析JSON字符串
                 cJSON *status = cJSON_GetObjectItem(root, CMD_KEY_STATUS);
                 cJSON *goal_id = cJSON_GetObjectItem(root, CMD_KEY_UUID);
                 // 服务器就绪状态判断
@@ -116,8 +118,7 @@ static void tcp_sock_handle_task(void *arg)
             case FRAME_TYPE_TRANSMIT: {
                 ESP_LOGI(TAG, "[sock]: %d byte received", sock_info.len);
                 
-                uint8_t source_device_id = sock_info.frame.source;
-                if (source_device_id == camera_id && camera_id != FRAME_INVALID_ID) {
+                if (frame.source == camera_id && camera_id != FRAME_INVALID_ID) {
                     memcpy(image_buffer, sock_info.data, sock_info.len);
                     image_size = sock_info.len;
                     xEventGroupSetBits(app_event_group, CAMERA_DATA_BIT);
@@ -127,8 +128,6 @@ static void tcp_sock_handle_task(void *arg)
             default : break;
         } /* switch (frame.type) */
     } /* while (1) */
-over:
-    vTaskDelete(NULL);
 }
 
 
@@ -143,21 +142,21 @@ static void btn_event_cb(lv_event_t * e)
                         SERVER_READY_BIT | CLIENT_READY_BIT,
                         pdFALSE, pdFALSE, 10 / portTICK_PERIOD_MS);
             if (bits & CLIENT_READY_BIT) {
-                cJSON *json = cJSON_CreateObject();
-                cJSON_AddStringToObject(json, CMD_KEY_IMAGE, CMD_VALUE_PICTURE);
-                char *json_str = cJSON_PrintUnformatted(json);
-                data_frame_send(tcp_socket, tx_buffer, FRAME_TYPE_TRANSMIT, camera_id, local_device_id,
-                                            strlen(json_str) + 1, json_str);
-                cJSON_Delete(json);
-                free(json_str);
+                // cJSON *json = cJSON_CreateObject();
+                // cJSON_AddStringToObject(json, CMD_KEY_IMAGE, CMD_VALUE_PICTURE);
+                // char *json_str = cJSON_PrintUnformatted(json);
+                // data_frame_send(tcp_socket, tx_rx_buffer, FRAME_TYPE_TRANSMIT, camera_id, local_device_id,
+                //                             strlen(json_str) + 1, (uint8_t *)json_str);
+                // cJSON_Delete(json);
+                // free(json_str);
                 
             } else if (bits & SERVER_READY_BIT) {
                 cJSON *json = cJSON_CreateObject();
                 cJSON_AddStringToObject(json, CMD_KEY_COMMAND, CMD_VALUE_UUID);
                 cJSON_AddStringToObject(json, CMD_KEY_NAME, CAMERA_DEVICE);
                 char *json_str = cJSON_PrintUnformatted(json);
-                data_frame_send(tcp_socket, tx_buffer, FRAME_TYPE_DIRECT, FRAME_SERVER_ID, local_device_id,
-                                            strlen(json_str) + 1, json_str);
+                data_frame_send(tcp_socket, tx_rx_buffer, FRAME_TYPE_DIRECT, FRAME_SERVER_ID, local_device_id,
+                                            strlen(json_str) + 1, (uint8_t *)json_str);
                 cJSON_Delete(json);
                 free(json_str);
             }
@@ -228,8 +227,20 @@ void app_main()
     rgb_light_init();
     lv_init();
     lv_port_disp_init();
-    wifi_init_sta();
-    sock_queue = xQueueCreate(1, sizeof(sock_package_info_t));
+
+    wifi_account_config_t wifi_config = {
+        .ssid = WIFI_AP_SSID,
+        .password = WIFI_AP_PAS,
+    };
+    wifi_sta_init(wifi_config);
+
+    tx_rx_buffer = (uint8_t *)heap_caps_malloc(SOCK_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    if (tx_rx_buffer == NULL) {
+        ESP_LOGE(TAG, "tx rx malloc failed!");
+        return;
+    }
+
+    sock_queue = xQueueCreate(1, sizeof(tcp_socket_info_t));
     if (sock_queue == NULL) {
         ESP_LOGE(TAG, "sock queue create failed");
         return;
@@ -240,8 +251,13 @@ void app_main()
         return;
     }
     
-    sock_register_callback(tcp_sock_recv_callback);
-    create_client_sock_task();
+    tcp_clinet_config_t ap_client_config = {
+        .server_ip = SOFTAP_SERVER_IP,
+        .server_port = SOFTAP_TCP_PORT,
+    };
+    create_tcp_socket_client(&ap_client_config);
+    tcp_client_register_callback(softap_server_recv_callback);
+    socket_connect_register_callback(softap_server_connect_callback);
 
     xTaskCreatePinnedToCore(tcp_sock_handle_task, "tcp_sock_handle_task", 8 * 1024, NULL, 15, NULL, APP_CPU_NUM);
 
