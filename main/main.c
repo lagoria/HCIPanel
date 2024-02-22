@@ -21,7 +21,8 @@
 
 static const char *TAG = "main";
 
-static int tcp_socket = INVALID_SOCK;
+static int server_socket = INVALID_SOCK;
+static int camera_socket = INVALID_SOCK;
 static EventGroupHandle_t app_event_group = NULL;
 static QueueHandle_t sock_queue = NULL;
 static uint8_t local_device_id = FRAME_INVALID_ID;
@@ -30,9 +31,13 @@ static uint8_t *tx_rx_buffer = NULL;
 static uint8_t *image_buffer = NULL;
 uint32_t image_size = 0;
 #define SERVER_READY_BIT    BIT0        // 服务器状态位
-#define CLIENT_READY_BIT    BIT1
+#define CAMERA_READY_BIT    BIT1
 #define CAMERA_DATA_BIT     BIT2
 
+enum {
+    SOFTAP_SERVER_MRAK = 0,
+    CAMERA_SERVER_MARK,
+};
 
 int data_frame_send(int sock, uint8_t *frame, frame_type_t type, uint8_t target_id, 
                     uint8_t local_id, uint32_t len, uint8_t *data)
@@ -46,30 +51,55 @@ int data_frame_send(int sock, uint8_t *frame, frame_type_t type, uint8_t target_
     return (socket_send(sock, frame, len + FRAME_HEADER_LEN));
 }
 
-static void softap_server_connect_callback(socket_connect_info_t info)
+static void tcp_socket_connect_callback(socket_connect_info_t info)
 {
-    /*  注册身份  */
-    cJSON *json = cJSON_CreateObject();
-    cJSON_AddStringToObject(json, CMD_KEY_COMMAND, CMD_VALUE_REGISTER);
-    cJSON_AddStringToObject(json, CMD_KEY_NAME, LOCAL_DEVICE_MARK);
-    char *json_str = cJSON_PrintUnformatted(json);
-    int len = data_frame_send(info.socket, tx_rx_buffer, FRAME_TYPE_DIRECT, FRAME_SERVER_ID, FRAME_INVALID_ID,
-                                strlen(json_str) + 1, (uint8_t *)json_str);
-    if (len < 0) {
-        ESP_LOGE(TAG, "Error occurred during socket_send");
+    switch (info.mark)
+    {
+    case SOFTAP_SERVER_MRAK:
+        server_socket = info.socket;
+        /*  注册身份  */
+        cJSON *json = cJSON_CreateObject();
+        cJSON_AddStringToObject(json, CMD_KEY_COMMAND, CMD_VALUE_REGISTER);
+        cJSON_AddStringToObject(json, CMD_KEY_NAME, LOCAL_DEVICE_MARK);
+        char *json_str = cJSON_PrintUnformatted(json);
+        int len = data_frame_send(info.socket, tx_rx_buffer, FRAME_TYPE_DIRECT, FRAME_SERVER_ID, FRAME_INVALID_ID,
+                                    strlen(json_str) + 1, (uint8_t *)json_str);
+        if (len < 0) {
+            ESP_LOGE(TAG, "Error occurred during socket_send");
+        }
+        ESP_LOGI(TAG, "Written: %.*s", len, json_str);
+        cJSON_Delete(json);
+        free(json_str);
+        xEventGroupSetBits(app_event_group, SERVER_READY_BIT);
+        break;
+    case CAMERA_SERVER_MARK:
+        camera_socket = info.socket;
+        ESP_LOGI(TAG, "camera server connected!");
+        xEventGroupSetBits(app_event_group, CAMERA_READY_BIT);
+        break;
+    default:
+        break;
     }
-    ESP_LOGI(TAG, "Written: %.*s", len, json_str);
-    cJSON_Delete(json);
-    free(json_str);
 }
 
-static void softap_server_recv_callback(tcp_socket_info_t info)
+static void tcp_socket_recv_callback(tcp_socket_info_t info)
 {
-    tcp_socket_info_t sock_info = info;
-    memcpy(tx_rx_buffer, info.data, info.len);
-    sock_info.data = tx_rx_buffer;
-    // 将数据送入数据队列
-    xQueueSend(sock_queue, &sock_info, 10 / portTICK_PERIOD_MS);
+    switch (info.mark) {
+    case SOFTAP_SERVER_MRAK:
+        tcp_socket_info_t sock_info = info;
+        memcpy(tx_rx_buffer, info.data, info.len);
+        sock_info.data = tx_rx_buffer;
+        // 将数据送入数据队列
+        xQueueSend(sock_queue, &sock_info, 10 / portTICK_PERIOD_MS);
+        break;
+    case CAMERA_SERVER_MARK:
+        ESP_LOGI(TAG, "recv image len:%d", info.len);
+        // memcpy(image_buffer, info.data, info.len);
+        break;
+    default:
+        break;
+    }
+
 }
 
 static void tcp_sock_handle_task(void *arg)
@@ -93,7 +123,6 @@ static void tcp_sock_handle_task(void *arg)
     
         switch (frame.type) {
             case FRAME_TYPE_RESPOND: {
-                tcp_socket = sock_info.socket;
                 local_device_id = frame.goal;
 
                 cJSON *root = cJSON_Parse((char *)recv_data);  // 解析JSON字符串
@@ -104,11 +133,8 @@ static void tcp_sock_handle_task(void *arg)
                     if (strcmp(status->valuestring, CMD_VALUE_SUCCESS) == 0) {
                         if (goal_id != NULL && status->type == cJSON_String) {
                             camera_id = (uint8_t )atoi(goal_id->valuestring);
-                            xEventGroupSetBits(app_event_group, CLIENT_READY_BIT);
                         }
-                        xEventGroupSetBits(app_event_group, SERVER_READY_BIT);
-                    } else {
-                        xEventGroupClearBits(app_event_group, CLIENT_READY_BIT);
+                        
                     }
                 }
                 cJSON_Delete(root);
@@ -139,23 +165,22 @@ static void btn_event_cb(lv_event_t * e)
         case LV_EVENT_CLICKED: {
             ESP_LOGI(TAG, "clicked");
             EventBits_t bits = xEventGroupWaitBits(app_event_group,
-                        SERVER_READY_BIT | CLIENT_READY_BIT,
+                        SERVER_READY_BIT | CAMERA_READY_BIT,
                         pdFALSE, pdFALSE, 10 / portTICK_PERIOD_MS);
-            if (bits & CLIENT_READY_BIT) {
-                // cJSON *json = cJSON_CreateObject();
-                // cJSON_AddStringToObject(json, CMD_KEY_IMAGE, CMD_VALUE_PICTURE);
-                // char *json_str = cJSON_PrintUnformatted(json);
-                // data_frame_send(tcp_socket, tx_rx_buffer, FRAME_TYPE_TRANSMIT, camera_id, local_device_id,
-                //                             strlen(json_str) + 1, (uint8_t *)json_str);
-                // cJSON_Delete(json);
-                // free(json_str);
+            if (bits & CAMERA_READY_BIT) {
+                cJSON *json = cJSON_CreateObject();
+                cJSON_AddStringToObject(json, CMD_KEY_IMAGE, CMD_VALUE_PICTURE);
+                char *json_str = cJSON_PrintUnformatted(json);
+                socket_send(camera_socket, (uint8_t *)json_str, strlen(json_str) + 1);
+                cJSON_Delete(json);
+                free(json_str);
                 
             } else if (bits & SERVER_READY_BIT) {
                 cJSON *json = cJSON_CreateObject();
                 cJSON_AddStringToObject(json, CMD_KEY_COMMAND, CMD_VALUE_UUID);
                 cJSON_AddStringToObject(json, CMD_KEY_NAME, CAMERA_DEVICE);
                 char *json_str = cJSON_PrintUnformatted(json);
-                data_frame_send(tcp_socket, tx_rx_buffer, FRAME_TYPE_DIRECT, FRAME_SERVER_ID, local_device_id,
+                data_frame_send(server_socket, tx_rx_buffer, FRAME_TYPE_DIRECT, FRAME_SERVER_ID, local_device_id,
                                             strlen(json_str) + 1, (uint8_t *)json_str);
                 cJSON_Delete(json);
                 free(json_str);
@@ -169,12 +194,6 @@ static void btn_event_cb(lv_event_t * e)
 
 void screen_manage_task(void *pvParameter)
 {
-    image_buffer = (uint8_t *)heap_caps_malloc(IMAGE_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
-    if (image_buffer == NULL) {
-        ESP_LOGE(TAG, "rx malloc failed!");
-        goto over;
-    }
-
     lv_obj_t * btn = lv_btn_create(lv_scr_act());           /*Add a button the current screen*/
     lv_obj_set_size(btn, 120, 50);                          /*Set its size*/
     lv_obj_align(btn, LV_ALIGN_CENTER, 0, 160);
@@ -189,7 +208,7 @@ void screen_manage_task(void *pvParameter)
         .header.always_zero = 0,
         .header.w = 320,
         .header.h = 240,
-        .header.cf = LV_IMG_CF_RAW,
+        .header.cf = LV_IMG_CF_TRUE_COLOR,
         .data_size = 320 * 240 * 2,
         .data = image_buffer,
     };
@@ -206,8 +225,6 @@ void screen_manage_task(void *pvParameter)
         vTaskDelay(pdMS_TO_TICKS(100));
 
     }
-over:
-    vTaskDelete(NULL);
 }
 
 
@@ -239,6 +256,11 @@ void app_main()
         ESP_LOGE(TAG, "tx rx malloc failed!");
         return;
     }
+    image_buffer = (uint8_t *)heap_caps_malloc(IMAGE_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    if (image_buffer == NULL) {
+        ESP_LOGE(TAG, "image_buffer malloc failed!");
+        return;
+    }
 
     sock_queue = xQueueCreate(1, sizeof(tcp_socket_info_t));
     if (sock_queue == NULL) {
@@ -251,13 +273,22 @@ void app_main()
         return;
     }
     
-    tcp_clinet_config_t ap_client_config = {
+    tcp_clinet_config_t client_config = {
         .server_ip = SOFTAP_SERVER_IP,
         .server_port = SOFTAP_TCP_PORT,
+        .mark = SOFTAP_SERVER_MRAK,
     };
-    create_tcp_socket_client(&ap_client_config);
-    tcp_client_register_callback(softap_server_recv_callback);
-    socket_connect_register_callback(softap_server_connect_callback);
+    create_tcp_socket_client(&client_config);
+
+    strncpy(client_config.server_ip, "192.168.4.4", strlen("192.168.4.4") + 1);
+    client_config.server_port = 6666;
+    client_config.mark = CAMERA_SERVER_MARK;
+
+    create_tcp_socket_client(&client_config);
+    create_socket_recover_service();
+
+    tcp_client_register_callback(tcp_socket_recv_callback);
+    socket_connect_register_callback(tcp_socket_connect_callback);
 
     xTaskCreatePinnedToCore(tcp_sock_handle_task, "tcp_sock_handle_task", 8 * 1024, NULL, 15, NULL, APP_CPU_NUM);
 

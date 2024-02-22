@@ -17,7 +17,7 @@ static const char *TAG = "socket_wrapper";
 // server variable
 static tcp_recv_callback_t tcp_server_recv_callback = NULL;
 static udp_recv_callback_t udp_server_recv_callback = NULL;
-static tcp_client_info_t *client_list_head = NULL;
+static tcp_client_info_t *tcp_client_info_head = NULL;
 
 static int const keepAlive = 1;              // 开启keepalive属性
 static int const keepIdle = 3;               // 如该连接在3秒内没有任何数据往来,则进行探测 
@@ -25,17 +25,33 @@ static int const keepInterval = 1;           // 探测时发包的时间间隔�
 static int const keepCount = 2;              // 探测尝试的次数.如果第1次探测包就收到响应了,则后2次的不再发.
 
 // client variable
+
+/* 创建的客户端信息列表 */
+struct socket_client_list_info {
+    char server_ip[16];
+    uint16_t server_port;
+    uint16_t bind_port;
+    uint8_t  mark;              // 客户端标识
+    struct socket_client_list_info *next;
+};
+
+typedef struct socket_client_list_info socket_client_list_t;
+
 static tcp_recv_callback_t tcp_client_recv_callback = NULL;
 static udp_recv_callback_t udp_client_recv_callback = NULL;
 static socket_connect_callback_t server_conn_callback = NULL;
+static socket_client_list_t *client_list_head = NULL;
 
 static EventGroupHandle_t sock_event_group = NULL;
 
 
 #define TCP_SERVER_RECOVER_BIT  BIT0    // TCP服务器断网重启服务位
-#define TCP_CLIENT_RECOVER_BIT  BIT1    // TCP服务器断网重启服务位
-#define UDP_SERVER_RECOVER_BIT  BIT2    // TCP服务器断网重启服务位
-#define UDP_CLIENT_RECOVER_BIT  BIT3    // TCP服务器断网重启服务位
+#define TCP_CLIENT_RECOVER_BIT  BIT1    // TCP客户端断网重启服务位
+#define UDP_SERVER_RECOVER_BIT  BIT2    // UDP服务器断网重启服务位
+#define UDP_CLIENT_RECOVER_BIT  BIT3    // UDP客户端断网重启服务位
+
+
+
 
 /**
  * @brief tcp socket receive callback register
@@ -100,7 +116,7 @@ int socket_send(const int sock, const uint8_t * data, const size_t len)
     while (to_write > 0) {
         int written = send(sock, data + (len - to_write), to_write, 0);
         if (written < 0 && errno != EINPROGRESS && errno != EAGAIN && errno != EWOULDBLOCK) {
-            ESP_LOGI(TAG,"Error occurred during sending");
+            ESP_LOGE(TAG,"Error occurred during sending");
             return -1;
         }
         to_write -= written;
@@ -130,11 +146,11 @@ static void add_tcp_client_list_node(int socket)
 {  
     tcp_client_info_t *new_client = (tcp_client_info_t *)malloc(sizeof(tcp_client_info_t));  
     if (new_client == NULL) return;
-    if (client_list_head == NULL) {
-        client_list_head = new_client;
+    if (tcp_client_info_head == NULL) {
+        tcp_client_info_head = new_client;
     } else {
         tcp_client_info_t *current;
-        current = client_list_head;
+        current = tcp_client_info_head;
         while (current->next != NULL) {
             current = current->next;
         }
@@ -149,12 +165,12 @@ static void add_tcp_client_list_node(int socket)
 
 static void delete_tcp_client_list_node(int socket)
 {
-    if (client_list_head == NULL) return;
+    if (tcp_client_info_head == NULL) return;
     tcp_client_info_t *current, *prev;
-    current = client_list_head;
+    current = tcp_client_info_head;
     // 判断是否为第一个节点
     if (current != NULL && current->socket == socket) {
-        client_list_head = current->next;
+        tcp_client_info_head = current->next;
         free(current);
         return;
     }
@@ -185,7 +201,7 @@ static void tcp_recv_task(void *pvParameters)
             char client_port = ntohs(client_addr_in->sin_port);
             ESP_LOGI(TAG, "Client IP:%s,Port:%d", client_ip, client_port);
             // 保存客户端IP地址,端口号
-            for (tcp_client_info_t *list = client_list_head; list; list = list->next) {
+            for (tcp_client_info_t *list = tcp_client_info_head; list; list = list->next) {
                 if (list->socket == socket) {
                     strcpy(list->ip, client_ip);
                     list->port = client_port;
@@ -274,7 +290,7 @@ static void tcp_server_task(void *pvParameters)
 
         // Find a free socket
         uint8_t client_count = 0;
-        for (tcp_client_info_t *list = client_list_head; list; list = list->next) {
+        for (tcp_client_info_t *list = tcp_client_info_head; list; list = list->next) {
             client_count++;
         }
 
@@ -389,7 +405,7 @@ error:
 
 tcp_client_info_t* get_clients_info_list()
 {
-    return client_list_head;
+    return tcp_client_info_head;
 }
 
 
@@ -432,26 +448,33 @@ int create_udp_socket_server(socket_server_config_t *config)
 
 static void tcp_client_task(void *pvParameters)
 {
-    tcp_clinet_config_t *pragma = (tcp_clinet_config_t *)pvParameters;
-    tcp_clinet_config_t config = *pragma;
+    uint8_t *pragma = (uint8_t *)pvParameters;
+    uint8_t instance_mark = *pragma;
+    int tcp_socket = INVALID_SOCK;
 
-    tcp_socket_info_t sock_info = {0};
+    socket_client_list_t *instance;
+    for (instance = client_list_head; instance; instance = instance->next) {
+        if (instance->mark == instance_mark) {
+            break;
+        }
+    }
+    if (instance == NULL) goto error;
 
     /* 将IPv4地址从点分十进制转化为网络字节序 */
     struct in_addr ip_addr;
-    inet_pton(AF_INET, config.server_ip, &ip_addr);
+    inet_pton(AF_INET, instance->server_ip, &ip_addr);
 
     struct sockaddr_in server_addr = {
         .sin_family = AF_INET,
         .sin_addr.s_addr = ip_addr.s_addr,
-        .sin_port = htons(config.server_port),
+        .sin_port = htons(instance->server_port),
     };
 
     // 等待wifi连接(AP模式跳过)
     wait_wifi_connect(portMAX_DELAY);
 
     // 创建TCP socket
-    int tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    tcp_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     if (tcp_socket < 0) {
         ESP_LOGE(TAG, "Failed to create TCP socket");
         goto error;
@@ -491,6 +514,9 @@ static void tcp_client_task(void *pvParameters)
         }
     }
 
+    tcp_socket_info_t sock_info = {0};
+    sock_info.mark = instance_mark;           // 多客户端标识
+    sock_info.socket = tcp_socket;
     /* allocation sock date buffer */
     sock_info.data = (uint8_t *)malloc(SOCK_BUFFER_SIZE + 8);
     if (sock_info.data == NULL) {
@@ -498,11 +524,12 @@ static void tcp_client_task(void *pvParameters)
         goto error;
     }
 
-    ESP_LOGI(TAG, "tcp server connect successful!");
+    ESP_LOGI(TAG, "[-%d-]tcp client started!", instance_mark);
     if (server_conn_callback != NULL) {
         socket_connect_info_t conn_info;
         conn_info.socket = tcp_socket;
         conn_info.target_addr = NULL;
+        conn_info.mark = sock_info.mark;
         server_conn_callback(conn_info);
     }
 
@@ -517,13 +544,11 @@ static void tcp_client_task(void *pvParameters)
 
         if(len > 0) {
             sock_info.data[len] = '\0';
-            sock_info.socket = tcp_socket;
             sock_info.len = len;
             if (tcp_client_recv_callback != NULL) {
                 tcp_client_recv_callback(sock_info);
             }
         }
-
     }
 
 error:
@@ -539,14 +564,23 @@ error:
 /* UDP客户端任务 */
 void udp_client_task(void *pvParameters)
 {
-    udp_clinet_config_t *pragma = (udp_clinet_config_t *)pvParameters;
-    udp_clinet_config_t config = *pragma;
-    
+    uint8_t *pragma = (uint8_t *)pvParameters;
+    uint8_t instance_mark = *pragma;
+    int udp_socket = INVALID_SOCK;
+
+    socket_client_list_t *instance;
+    for (instance = client_list_head; instance; instance = instance->next) {
+        if (instance->mark == instance_mark) {
+            break;
+        }
+    }
+    if (instance == NULL) goto error;
+
     // 等待wifi连接(AP模式跳过)
     wait_wifi_connect(portMAX_DELAY);
 
     // Create a socket for UDP broadcast
-    int udp_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    udp_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (udp_socket < 0) {
         ESP_LOGE(TAG, "Failed to create socket: %d", udp_socket);
         goto error;
@@ -567,7 +601,7 @@ void udp_client_task(void *pvParameters)
     struct sockaddr_in local_addr = {
         .sin_family = AF_INET,
         .sin_addr.s_addr = htonl(INADDR_ANY),       // 接受任何ip地址
-        .sin_port = htons(config.bind_port),        // 绑定本地端口
+        .sin_port = htons(instance->bind_port),        // 绑定本地端口
     };
 
     if (bind(udp_socket, (struct sockaddr *)&local_addr, sizeof(local_addr)) < 0) {
@@ -577,17 +611,20 @@ void udp_client_task(void *pvParameters)
 
     /* 将IPv4地址从点分十进制转化为网络字节序 */
     struct in_addr ip_addr;
-    inet_pton(AF_INET, config.server_ip, &ip_addr);
+    inet_pton(AF_INET, instance->server_ip, &ip_addr);
 
     /* 目标地址设置 */
     struct sockaddr_in dest_addr = {
         .sin_family = AF_INET,
         .sin_addr.s_addr = ip_addr.s_addr,
-        .sin_port = htons(config.server_port),
+        .sin_port = htons(instance->server_port),
     };
     socklen_t socklen = sizeof(dest_addr);
 
     udp_socket_info_t sock_info = {0};
+    sock_info.mark = instance_mark;           // 多客户端标识
+    sock_info.socket = udp_socket;
+    sock_info.source_addr = &dest_addr;
     /* allocation sock date buffer */
     sock_info.data = (uint8_t *)malloc(SOCK_BUFFER_SIZE + 8);
     if (sock_info.data == NULL) {
@@ -595,11 +632,13 @@ void udp_client_task(void *pvParameters)
         goto error;
     }
 
-    ESP_LOGI(TAG, "udp client started");
+
+    ESP_LOGI(TAG, "[-%d-]udp client started!", instance_mark);
     if (server_conn_callback != NULL) {
         socket_connect_info_t conn_info;
         conn_info.socket = udp_socket;
         conn_info.target_addr = &dest_addr;
+        conn_info.mark = sock_info.mark;
         server_conn_callback(conn_info);
     }
 
@@ -613,9 +652,7 @@ void udp_client_task(void *pvParameters)
             break;
         } else if(recv_len > 0) {
             sock_info.data[recv_len] = '\0';
-            sock_info.socket = udp_socket;
             sock_info.len = recv_len;
-            sock_info.source_addr = &dest_addr;
             if (udp_client_recv_callback != NULL) {
                 udp_client_recv_callback(sock_info);          // 回调函数
             }
@@ -630,18 +667,60 @@ error:
     vTaskDelete(NULL);
 }
 
+/**
+ * @brief 添加一个客户端创建实例链表节点
+ * 
+ * @param mark 客户端实例标识
+ */
+static socket_client_list_t * add_client_instance_list_node(uint8_t mark)
+{
+    socket_client_list_t *new_client = (socket_client_list_t *)malloc(sizeof(socket_client_list_t));  
+    if (new_client == NULL) return NULL;
+    if (client_list_head == NULL) {
+        client_list_head = new_client;
+    } else {
+        socket_client_list_t *current;
+        current = client_list_head;
+        while (current->next != NULL) {
+            current = current->next;
+        }
+        current->next = new_client;
+    }
 
+    // 设置节点信息
+    memset(new_client, 0, sizeof(socket_client_list_t));
+    new_client->mark = mark;
+    new_client->next = NULL;
+    return new_client;
+}
 
 int create_udp_socket_client(udp_clinet_config_t *config)
 {
     if (sock_event_group == NULL) {
         sock_event_group = xEventGroupCreate();
     }
-    static udp_clinet_config_t static_config = {0};
-    if (config != NULL) {
-        static_config = *config;
+    socket_client_list_t *instance = NULL;
+    /* 遍历客户端实例 判断是否重新配置 */
+    for (socket_client_list_t *list = client_list_head; list; list = list->next) {
+        if (list->mark == config->mark) {
+            instance = list;
+            break;
+        }
     }
-    if (xTaskCreate(udp_client_task, "udp_client_task", 4 * 1024, (void *)&static_config, 12, NULL) != pdPASS) {
+    if (instance == NULL) {
+        /* 创建新的实例 */
+        instance = add_client_instance_list_node(config->mark);
+    }
+    if (instance == NULL) return -1;
+    strncpy(instance->server_ip, config->server_ip, 16);
+    instance->server_port = config->server_port;
+    instance->bind_port = config->bind_port;
+
+    char task_name[16];
+    sprintf(task_name, "udp_client_%d", instance->mark);
+    ESP_LOGI(TAG, "create task = %s", task_name);
+
+    if (xTaskCreate(udp_client_task, task_name, 4 * 1024, (void *)&instance->mark, 12, NULL) != pdPASS) {
         return -1;
     }
 
@@ -653,11 +732,29 @@ int create_tcp_socket_client(tcp_clinet_config_t *config)
     if (sock_event_group == NULL) {
         sock_event_group = xEventGroupCreate();
     }
-    static tcp_clinet_config_t static_config = {0};
-    if (config != NULL) {
-        static_config = *config;
+
+    socket_client_list_t *instance = NULL;
+    /* 遍历客户端实例 判断是否重新配置 */
+    for (socket_client_list_t *list = client_list_head; list; list = list->next) {
+        if (list->mark == config->mark) {
+            instance = list;
+            break;
+        }
     }
-    if (xTaskCreate(tcp_client_task, "tcp_client_task", 6 * 1024, (void *)&static_config, 10, NULL) != pdPASS) {
+    if (instance == NULL) {
+        /* 创建新的实例 */
+        instance = add_client_instance_list_node(config->mark);
+    }
+    if (instance == NULL) return -1;
+    strncpy(instance->server_ip, config->server_ip, 16);
+    instance->server_port = config->server_port;
+    instance->bind_port = 0;
+
+    char task_name[16];
+    sprintf(task_name, "tcp_client_%d", instance->mark);
+    ESP_LOGI(TAG, "create task = %s", task_name);
+
+    if (xTaskCreate(tcp_client_task, task_name, 6 * 1024, (void *)&instance->mark, 10, NULL) != pdPASS) {
         return -1;
     }
 
@@ -676,6 +773,8 @@ static void service_restart_task(void *pvParameters)
                         UDP_SERVER_RECOVER_BIT | UDP_CLIENT_RECOVER_BIT,
                         pdFALSE, pdFALSE, portMAX_DELAY);
         wait_wifi_connect(portMAX_DELAY);
+        
+
         if (bits & TCP_SERVER_RECOVER_BIT) {
             ESP_LOGI(TAG, "recovering tcp server");
             xEventGroupClearBits(sock_event_group, TCP_SERVER_RECOVER_BIT);
@@ -683,8 +782,14 @@ static void service_restart_task(void *pvParameters)
         }
         if (bits & TCP_CLIENT_RECOVER_BIT) {
             ESP_LOGI(TAG, "recovering tcp client");
+            for (socket_client_list_t *instance = client_list_head; instance; instance = instance->next) {
+                if (instance->bind_port == 0) {
+                    char task_name[16];
+                    sprintf(task_name, "tcp_client_%d", instance->mark);
+                    xTaskCreate(tcp_client_task, task_name, 6 * 1024, (void *)&instance->mark, 10, NULL);
+                }
+            }
             xEventGroupClearBits(sock_event_group, TCP_CLIENT_RECOVER_BIT);
-            create_tcp_socket_client(NULL);
         }
         if (bits & UDP_SERVER_RECOVER_BIT) {
             ESP_LOGI(TAG, "recovering udp server");
@@ -693,8 +798,15 @@ static void service_restart_task(void *pvParameters)
         }
         if (bits & UDP_CLIENT_RECOVER_BIT) {
             ESP_LOGI(TAG, "recovering udp client");
+            for (socket_client_list_t *instance = client_list_head; instance; instance = instance->next) {
+                if (instance->bind_port != 0) {
+                    char task_name[16];
+                    sprintf(task_name, "udp_client_%d", instance->mark);
+                    xTaskCreate(udp_client_task, task_name, 4 * 1024, (void *)&instance->mark, 12, NULL);
+                }
+            }
+            
             xEventGroupClearBits(sock_event_group, UDP_CLIENT_RECOVER_BIT);
-            create_udp_socket_client(NULL);
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }    
@@ -710,4 +822,5 @@ int create_socket_recover_service(void)
     }
     return 0;
 }
+
 

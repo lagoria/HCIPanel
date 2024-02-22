@@ -6,9 +6,6 @@
 
 #define LOCAL_DEVICE_MARK           "HCIPanel"          // 客户端标识符
 
-#define SOCK_RX_BUFFER_LEN          4 * 1024            // 阻塞接收缓存大小
-#define APP_TCP_RX_BUF_LEN          24 * 1024           // 数据帧接收缓存大小
-#define APP_TCP_TX_BUF_LEN          1024                // 数据帧发送缓存大小
 #define IMAGE_BUFFER_SIZE           24 * 1024
 
 /*----wifi_sta configure----*/

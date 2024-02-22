@@ -16,10 +16,13 @@
 
 
 /* ----------------type define----------------*/
+
+/* tcp socket 接收回调参数类型 */
 typedef struct {
     int                 socket;
     uint8_t             *data;
     int                 len;
+    uint8_t             mark;                   // 客户端实例标识
 } tcp_socket_info_t;
 
 /* tcp 接收回调函数类型 */
@@ -30,6 +33,7 @@ typedef struct {
     uint8_t             *data;
     int                 len;
     struct sockaddr_in  *source_addr;
+    uint8_t             mark;                   // 客户端实例标识
 } udp_socket_info_t;
 
 /* udp 接收回调函数类型 */
@@ -39,6 +43,7 @@ typedef void (*udp_recv_callback_t)(udp_socket_info_t);
 typedef struct {
     int                 socket;
     struct sockaddr_in  *target_addr;       // TCP通信则为NULL
+    uint8_t  mark;                          // 客户端实例标识
 } socket_connect_info_t;
 
 /* 服务器连接成功回调函数类型 */
@@ -66,16 +71,20 @@ typedef struct tcp_client_info tcp_client_info_t;
 
 
 /* -------- client type define-------*/
+
 typedef struct {
     char server_ip[16];
     uint16_t server_port;
+    uint8_t  mark;              // 客户端标识
 } tcp_clinet_config_t;
 
 typedef struct {
     char server_ip[16];
     uint16_t server_port;
     uint16_t bind_port;
+    uint8_t  mark;              // 客户端标识
 } udp_clinet_config_t;
+
 
 /*-----------------------function define-------------------------------*/
 
