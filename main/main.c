@@ -31,8 +31,9 @@ static uint8_t *tx_rx_buffer = NULL;
 static uint8_t *image_buffer = NULL;
 uint32_t image_size = 0;
 #define SERVER_READY_BIT    BIT0        // 服务器状态位
-#define CAMERA_READY_BIT    BIT1
-#define CAMERA_DATA_BIT     BIT2
+#define CONNECT_CAMERA_BIT  BIT1
+#define CAMERA_READY_BIT    BIT2
+#define CAMERA_DATA_BIT     BIT3
 
 enum {
     SOFTAP_SERVER_MRAK = 0,
@@ -93,8 +94,24 @@ static void tcp_socket_recv_callback(tcp_socket_info_t info)
         xQueueSend(sock_queue, &sock_info, 10 / portTICK_PERIOD_MS);
         break;
     case CAMERA_SERVER_MARK:
-        ESP_LOGI(TAG, "recv image len:%d", info.len);
-        // memcpy(image_buffer, info.data, info.len);
+        static uint32_t image_len = 0; 
+        static uint32_t index = 0;
+        if (image_len == 0) {
+            index = 0;
+            image_len = *(uint32_t *)info.data;
+            if(info.len > 4) {
+                memcpy(image_buffer, &info.data[4], info.len - 4);
+                index = info.len - 4;
+            }
+            ESP_LOGI(TAG, "recv image len:%ld", image_len);
+        } else {
+            memcpy(&image_buffer[index], info.data, info.len);
+            index += info.len;
+        }
+        if (index == image_len) {
+            image_len = 0;
+            xEventGroupSetBits(app_event_group, CAMERA_DATA_BIT);
+        }
         break;
     default:
         break;
@@ -120,39 +137,54 @@ static void tcp_sock_handle_task(void *arg)
         if (recv_data == NULL) continue;
         sock_info.data[sock_info.len] = '\0';
         ESP_LOGI(TAG, "[sock]: %d byte received %s", recv_len, (char *)recv_data);
+        cJSON *root = cJSON_Parse((char *)recv_data);  // 解析JSON字符串
     
         switch (frame.type) {
-            case FRAME_TYPE_RESPOND: {
-                local_device_id = frame.goal;
+        case FRAME_TYPE_RESPOND:
+            local_device_id = frame.goal;
 
-                cJSON *root = cJSON_Parse((char *)recv_data);  // 解析JSON字符串
-                cJSON *status = cJSON_GetObjectItem(root, CMD_KEY_STATUS);
-                cJSON *goal_id = cJSON_GetObjectItem(root, CMD_KEY_UUID);
-                // 服务器就绪状态判断
-                if (status != NULL && status->type == cJSON_String) {
-                    if (strcmp(status->valuestring, CMD_VALUE_SUCCESS) == 0) {
-                        if (goal_id != NULL && status->type == cJSON_String) {
-                            camera_id = (uint8_t )atoi(goal_id->valuestring);
-                        }
-                        
+            cJSON *status = cJSON_GetObjectItem(root, CMD_KEY_STATUS);
+            cJSON *goal_id = cJSON_GetObjectItem(root, CMD_KEY_UUID);
+            // 服务器就绪状态判断
+            if (status != NULL && status->type == cJSON_String) {
+                if (strcmp(status->valuestring, CMD_VALUE_SUCCESS) == 0) {
+                    if (goal_id != NULL && status->type == cJSON_String) {
+                        camera_id = (uint8_t )atoi(goal_id->valuestring);
+
+                        cJSON *json = cJSON_CreateObject();
+                        cJSON_AddStringToObject(json, CMD_KEY_REQUEST, CMD_VALUE_SERVICE);
+                        char *json_str = cJSON_PrintUnformatted(json);
+                        data_frame_send(server_socket, tx_rx_buffer, FRAME_TYPE_TRANSMIT, camera_id, local_device_id,
+                                        strlen(json_str) + 1, (uint8_t *)json_str);
+                        cJSON_Delete(json);
+                        free(json_str);
                     }
+                    
                 }
-                cJSON_Delete(root);
-                
-                break;
             }
-            case FRAME_TYPE_TRANSMIT: {
-                ESP_LOGI(TAG, "[sock]: %d byte received", sock_info.len);
-                
-                if (frame.source == camera_id && camera_id != FRAME_INVALID_ID) {
-                    memcpy(image_buffer, sock_info.data, sock_info.len);
-                    image_size = sock_info.len;
-                    xEventGroupSetBits(app_event_group, CAMERA_DATA_BIT);
+            
+            break;
+        case FRAME_TYPE_TRANSMIT:
+            // 获取到camera tcp服务器信息
+            cJSON *ip = cJSON_GetObjectItem(root, CMD_KEY_IP);
+            cJSON *port = cJSON_GetObjectItem(root, CMD_KEY_PORT);
+            if (ip != NULL && ip->type == cJSON_String) {
+                if (port != NULL && port->type == cJSON_String) {
+                    socket_clinet_config_t client_config = {
+                        .way = WAY_TCP,
+                        .mark = CAMERA_SERVER_MARK,
+                    };
+                    client_config.server_port = (uint16_t )atoi(port->valuestring),
+                    strcpy(client_config.server_ip, ip->valuestring);
+                    create_socket_wrapper_client(&client_config);
+                    xEventGroupSetBits(app_event_group, CONNECT_CAMERA_BIT);
                 }
-                break;
             }
-            default : break;
+            break;
+        default : break;
         } /* switch (frame.type) */
+
+        cJSON_Delete(root);
     } /* while (1) */
 }
 
@@ -200,7 +232,7 @@ void screen_manage_task(void *pvParameter)
     lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_ALL, NULL);           /*Assign a callback to the button*/
 
     lv_obj_t * label = lv_label_create(btn);          /*Add a label to the button*/
-    lv_label_set_text(label, "Start!");                     /*Set the labels text*/
+    lv_label_set_text(label, "Connect");                     /*Set the labels text*/
     lv_obj_center(label);
 
 
@@ -214,14 +246,22 @@ void screen_manage_task(void *pvParameter)
     };
     lv_obj_t * picture = lv_img_create(lv_scr_act());
     while (1) {
-        xEventGroupWaitBits(app_event_group,
-                        CAMERA_DATA_BIT,
+        EventBits_t bits = xEventGroupWaitBits(app_event_group,
+                        CAMERA_DATA_BIT | CONNECT_CAMERA_BIT,
                         pdFALSE, pdFALSE, portMAX_DELAY);
-        esp_log_buffer_hex(TAG, image_buffer, 10);
-        lv_img_set_src(picture, &image);
-        lv_obj_center(picture);
+
+        if (bits & CONNECT_CAMERA_BIT) {
+            lv_label_set_text(label, "Picture");
+            xEventGroupClearBits(app_event_group, CONNECT_CAMERA_BIT);
+        } 
+        if (bits & CAMERA_DATA_BIT) {
+            // esp_log_buffer_hex(TAG, image_buffer, 10);
+            lv_img_set_src(picture, &image);
+            lv_obj_center(picture);
+            
+            xEventGroupClearBits(app_event_group, CAMERA_DATA_BIT);
+        }
         
-        xEventGroupClearBits(app_event_group, CAMERA_DATA_BIT);
         vTaskDelay(pdMS_TO_TICKS(100));
 
     }
@@ -251,7 +291,7 @@ void app_main()
     };
     wifi_sta_init(wifi_config);
 
-    tx_rx_buffer = (uint8_t *)heap_caps_malloc(SOCK_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    tx_rx_buffer = (uint8_t *)heap_caps_malloc(DEFAULT_SOCK_BUF_SIZE, MALLOC_CAP_SPIRAM);
     if (tx_rx_buffer == NULL) {
         ESP_LOGE(TAG, "tx rx malloc failed!");
         return;
@@ -273,19 +313,14 @@ void app_main()
         return;
     }
     
-    tcp_clinet_config_t client_config = {
+    socket_clinet_config_t client_config = {
         .server_ip = SOFTAP_SERVER_IP,
         .server_port = SOFTAP_TCP_PORT,
+        .way = WAY_TCP,
         .mark = SOFTAP_SERVER_MRAK,
     };
-    create_tcp_socket_client(&client_config);
-
-    strncpy(client_config.server_ip, "192.168.4.4", strlen("192.168.4.4") + 1);
-    client_config.server_port = 6666;
-    client_config.mark = CAMERA_SERVER_MARK;
-
-    create_tcp_socket_client(&client_config);
-    create_socket_recover_service();
+    create_socket_wrapper_client(&client_config);
+    create_socket_client_recover_service();
 
     tcp_client_register_callback(tcp_socket_recv_callback);
     socket_connect_register_callback(tcp_socket_connect_callback);

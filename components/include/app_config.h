@@ -28,16 +28,25 @@
 #define CMD_VALUE_VIDEO             "video"
 
 /* public 指令定义  */
+// 服务器回应状态
 #define CMD_KEY_STATUS              "status"
-#define CMD_KEY_NAME                "name"
-#define CMD_KEY_UDP_REQUEST         "request"
-#define CMD_KEY_COMMAND             "command"
-#define CMD_KEY_UUID                "id"
+#define CMD_VALUE_SUCCESS           "succeed"
 
+#define CMD_KEY_NAME                "name"
+#define CMD_KEY_UUID                "id"
+#define CMD_KEY_IP                  "ip"
+#define CMD_KEY_PORT                "port"
+
+// 请求设备服务，获取服务器地址
+#define CMD_KEY_REQUEST             "request"
+#define CMD_VALUE_SERVICE           "service"
+
+// 服务器操作命令
+#define CMD_KEY_COMMAND             "command"
 #define CMD_VALUE_REGISTER          "register"
 #define CMD_VALUE_LIST              "list"
 #define CMD_VALUE_UUID              "uuid"
-#define CMD_VALUE_SUCCESS           "succeed"
+
 
 typedef struct {
     uint8_t head;

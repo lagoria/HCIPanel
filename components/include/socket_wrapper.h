@@ -4,16 +4,18 @@
 #include "sys/socket.h"
 #include "netdb.h"
 #include "errno.h"
-#include "esp_netif.h"
 
 
-#ifndef SOCK_BUFFER_SIZE
-#define SOCK_BUFFER_SIZE        2 * 1024         // 套接字数据缓存大小(参考MTU大小)
+#ifndef DEFAULT_SOCK_BUF_SIZE
+#define DEFAULT_SOCK_BUF_SIZE        1024         // 套接字数据缓存大小(参考MTU大小)
 #endif
 
 #define INVALID_SOCK            (-1)
 
-
+typedef enum {
+    WAY_TCP,
+    WAY_UDP,
+} socket_way_t;
 
 /* ----------------type define----------------*/
 
@@ -22,7 +24,7 @@ typedef struct {
     int                 socket;
     uint8_t             *data;
     int                 len;
-    uint8_t             mark;                   // 客户端实例标识
+    uint8_t             mark;                   // 实例标识
 } tcp_socket_info_t;
 
 /* tcp 接收回调函数类型 */
@@ -33,7 +35,7 @@ typedef struct {
     uint8_t             *data;
     int                 len;
     struct sockaddr_in  *source_addr;
-    uint8_t             mark;                   // 客户端实例标识
+    uint8_t             mark;                   // 实例标识
 } udp_socket_info_t;
 
 /* udp 接收回调函数类型 */
@@ -50,9 +52,12 @@ typedef struct {
 typedef void (*socket_connect_callback_t)(socket_connect_info_t);
 
 /* -------- server type define-------*/
+
 typedef struct {
     uint16_t listen_port;
-    uint8_t  max_conn_num;
+    uint8_t  maxcon_num;
+    socket_way_t way;
+    uint8_t mark;                   // 实例标识
 } socket_server_config_t;
 
 
@@ -73,22 +78,26 @@ typedef struct tcp_client_info tcp_client_info_t;
 /* -------- client type define-------*/
 
 typedef struct {
-    char server_ip[16];
-    uint16_t server_port;
+    char server_ip[16];         // 目标服务器IP
+    uint16_t server_port;       // 目标服务器端口
+    uint16_t bind_port;         // UDP客户端配置绑定端口
+    socket_way_t way;           // 通信方式 TCP or UDP
     uint8_t  mark;              // 客户端标识
-} tcp_clinet_config_t;
-
-typedef struct {
-    char server_ip[16];
-    uint16_t server_port;
-    uint16_t bind_port;
-    uint8_t  mark;              // 客户端标识
-} udp_clinet_config_t;
+} socket_clinet_config_t;
 
 
 /*-----------------------function define-------------------------------*/
 
-// 通过套接字发送数据
+/**
+ * @brief Sends the specified data to the socket. This function blocks until all bytes got sent.
+ *
+ * @param[in] sock Socket to write data
+ * @param[in] data Data to be written
+ * @param[in] len Length of the data
+ * @return
+ *          >0 : Size the written data
+ *          -1 : Error occurred during socket write operation
+ */
 int socket_send(const int sock, const uint8_t * data, const size_t len);
 
 /* -------- server function define -------*/
@@ -102,12 +111,13 @@ void udp_server_register_callback(udp_recv_callback_t callback_func);
 // 获取客户端信息
 tcp_client_info_t* get_clients_info_list();
 
-// 创建tcp服务器任务
-int create_tcp_socket_server(socket_server_config_t *config);
-
-// 创建udp服务器任务
-int create_udp_socket_server(socket_server_config_t *config);
-
+/**
+ * @brief Create a socket wrapper server object
+ * 
+ * @param config 
+ * @return int 
+ */
+int create_socket_wrapper_server(socket_server_config_t *config);
 
 /* -------- client function define -------*/
 
@@ -119,18 +129,28 @@ void udp_client_register_callback(udp_recv_callback_t callback_func);
 // 注册服务器连接成功回调函数
 void socket_connect_register_callback(socket_connect_callback_t callback_func);
 
-// 创建TCP客户端任务
-int create_tcp_socket_client(tcp_clinet_config_t *config);
-
-// 创建UDP客户端任务
-int create_udp_socket_client(udp_clinet_config_t *config);
+/**
+ * @brief Create a socket wrapper client object
+ * 
+ * @param config 客户端配置
+ * @return int   0：成功，-1失败
+ */
+int create_socket_wrapper_client(socket_clinet_config_t *config);
 
 
 /**
- * @brief Create a socket recover service object
+ * @brief Create a socket client recover service object
  * 
  * @return int 
  */
-int create_socket_recover_service(void);
+int create_socket_client_recover_service(void);
+
+
+/**
+ * @brief Delete a socket wrapper client object
+ * 
+ * @param mark 
+ */
+void delete_socket_wrapper_client(uint8_t mark);
 
 #endif
