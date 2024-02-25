@@ -4,6 +4,7 @@
 #include "sys/socket.h"
 #include "netdb.h"
 #include "errno.h"
+#include "esp_netif.h"
 
 
 #ifndef DEFAULT_SOCK_BUF_SIZE
@@ -52,7 +53,6 @@ typedef struct {
 typedef void (*socket_connect_callback_t)(socket_connect_info_t);
 
 /* -------- server type define-------*/
-
 typedef struct {
     uint16_t listen_port;
     uint8_t  maxcon_num;
@@ -144,13 +144,5 @@ int create_socket_wrapper_client(socket_clinet_config_t *config);
  * @return int 
  */
 int create_socket_client_recover_service(void);
-
-
-/**
- * @brief Delete a socket wrapper client object
- * 
- * @param mark 
- */
-void delete_socket_wrapper_client(uint8_t mark);
 
 #endif

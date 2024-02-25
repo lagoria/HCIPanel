@@ -1,6 +1,8 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
+#define APP_OTA_URL         "http://192.168.4.254:8070/hci_panel.bin"
+
 /*----sock_client configure----*/
 
 

@@ -97,6 +97,20 @@ bool wait_wifi_connect(uint32_t wait_time)
     }
 }
 
+bool wait_wifi_disconnect(uint32_t wait_time)
+{
+    if (wifi_mode == WIFI_MODE_AP) return true;
+
+    EventBits_t bits = xEventGroupWaitBits(wifi_event_group,
+                        WIFI_DISCONNECTED_BIT,
+                        pdFALSE, pdFALSE, wait_time);
+    if (bits & WIFI_DISCONNECTED_BIT) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
 {
@@ -170,9 +184,8 @@ void wifi_sta_connect_reset(wifi_account_config_t account)
     xEventGroupSetBits(wifi_event_group, WIFI_RESET_BIT);
     esp_wifi_disconnect();
     /* wait for wifi disconnected */
-    xEventGroupWaitBits(wifi_event_group,
-                        WIFI_DISCONNECTED_BIT,
-                        pdFALSE, pdFALSE, portMAX_DELAY);
+    wait_wifi_disconnect(portMAX_DELAY);
+    
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     xEventGroupClearBits(wifi_event_group, WIFI_RESET_BIT);
     esp_wifi_connect();

@@ -411,7 +411,7 @@ int create_socket_wrapper_server(socket_server_config_t *config)
         err = xTaskCreate(tcp_server_task, task_name, 6 * 1024, (void *)&server_config, 11, NULL);
         break;
     case WAY_UDP:
-        sprintf(task_name, "tcp_server_%d", server_config.mark);
+        sprintf(task_name, "udp_server_%d", server_config.mark);
         ESP_LOGI(TAG, "create task = %s", task_name);
         err = xTaskCreate(udp_server_task, task_name, 4 * 1024, (void *)&server_config, 12, NULL);
         break;
@@ -816,7 +816,7 @@ int create_socket_client_recover_service(void)
     if (sock_event_group == NULL) {
         return -1;
     }
-    if (xTaskCreate(service_restart_task, "service_restart_task", 2 * 1024, NULL, 10, NULL) != pdPASS) {
+    if (xTaskCreate(service_restart_task, "service_restart_task", 2 * 1024, NULL, 20, NULL) != pdPASS) {
         return -1;
     }
     return 0;

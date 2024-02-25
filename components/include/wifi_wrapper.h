@@ -51,9 +51,26 @@ sta_info_wrapper_t * get_wifi_sta_list_info(void);
 
 // 初始化wifi station模式
 void wifi_sta_init(wifi_account_config_t account);
-// 等待wifi连接
+
+/**
+ * @brief wait for wifi connected
+ * 
+ * @param wait_time wait time (ticks)
+ * @return true connected 
+ * @return false disconnected
+ */
 bool wait_wifi_connect(uint32_t wait_time);
-// wifi连接重置配置
+
+/**
+ * @brief wait for wifi disconnected
+ * 
+ * @param wait_time wait time (ticks)
+ * @return true disconnected 
+ * @return false connected
+ */
+bool wait_wifi_disconnect(uint32_t wait_time);
+
+// wifi连接重置
 void wifi_sta_connect_reset(wifi_account_config_t account);
 
 #endif

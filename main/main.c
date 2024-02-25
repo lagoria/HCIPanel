@@ -17,27 +17,24 @@
 #include "lv_port_disp.h"
 #include "wifi_wrapper.h"
 #include "socket_wrapper.h"
+#include "http_ota_wrapper.h"
 #include "app_config.h"
 
 static const char *TAG = "main";
 
 static int server_socket = INVALID_SOCK;
-static int camera_socket = INVALID_SOCK;
 static EventGroupHandle_t app_event_group = NULL;
 static QueueHandle_t sock_queue = NULL;
 static uint8_t local_device_id = FRAME_INVALID_ID;
 static uint8_t camera_id = FRAME_INVALID_ID;
 static uint8_t *tx_rx_buffer = NULL;
 static uint8_t *image_buffer = NULL;
-uint32_t image_size = 0;
+
 #define SERVER_READY_BIT    BIT0        // 服务器状态位
-#define CONNECT_CAMERA_BIT  BIT1
-#define CAMERA_READY_BIT    BIT2
-#define CAMERA_DATA_BIT     BIT3
+#define CAMERA_READY_BIT    BIT1
 
 enum {
     SOFTAP_SERVER_MRAK = 0,
-    CAMERA_SERVER_MARK,
 };
 
 int data_frame_send(int sock, uint8_t *frame, frame_type_t type, uint8_t target_id, 
@@ -73,11 +70,6 @@ static void tcp_socket_connect_callback(socket_connect_info_t info)
         free(json_str);
         xEventGroupSetBits(app_event_group, SERVER_READY_BIT);
         break;
-    case CAMERA_SERVER_MARK:
-        camera_socket = info.socket;
-        ESP_LOGI(TAG, "camera server connected!");
-        xEventGroupSetBits(app_event_group, CAMERA_READY_BIT);
-        break;
     default:
         break;
     }
@@ -92,26 +84,6 @@ static void tcp_socket_recv_callback(tcp_socket_info_t info)
         sock_info.data = tx_rx_buffer;
         // 将数据送入数据队列
         xQueueSend(sock_queue, &sock_info, 10 / portTICK_PERIOD_MS);
-        break;
-    case CAMERA_SERVER_MARK:
-        static uint32_t image_len = 0; 
-        static uint32_t index = 0;
-        if (image_len == 0) {
-            index = 0;
-            image_len = *(uint32_t *)info.data;
-            if(info.len > 4) {
-                memcpy(image_buffer, &info.data[4], info.len - 4);
-                index = info.len - 4;
-            }
-            ESP_LOGI(TAG, "recv image len:%ld", image_len);
-        } else {
-            memcpy(&image_buffer[index], info.data, info.len);
-            index += info.len;
-        }
-        if (index == image_len) {
-            image_len = 0;
-            xEventGroupSetBits(app_event_group, CAMERA_DATA_BIT);
-        }
         break;
     default:
         break;
@@ -170,14 +142,7 @@ static void tcp_sock_handle_task(void *arg)
             cJSON *port = cJSON_GetObjectItem(root, CMD_KEY_PORT);
             if (ip != NULL && ip->type == cJSON_String) {
                 if (port != NULL && port->type == cJSON_String) {
-                    socket_clinet_config_t client_config = {
-                        .way = WAY_TCP,
-                        .mark = CAMERA_SERVER_MARK,
-                    };
-                    client_config.server_port = (uint16_t )atoi(port->valuestring),
-                    strcpy(client_config.server_ip, ip->valuestring);
-                    create_socket_wrapper_client(&client_config);
-                    xEventGroupSetBits(app_event_group, CONNECT_CAMERA_BIT);
+
                 }
             }
             break;
@@ -200,12 +165,7 @@ static void btn_event_cb(lv_event_t * e)
                         SERVER_READY_BIT | CAMERA_READY_BIT,
                         pdFALSE, pdFALSE, 10 / portTICK_PERIOD_MS);
             if (bits & CAMERA_READY_BIT) {
-                cJSON *json = cJSON_CreateObject();
-                cJSON_AddStringToObject(json, CMD_KEY_IMAGE, CMD_VALUE_PICTURE);
-                char *json_str = cJSON_PrintUnformatted(json);
-                socket_send(camera_socket, (uint8_t *)json_str, strlen(json_str) + 1);
-                cJSON_Delete(json);
-                free(json_str);
+                
                 
             } else if (bits & SERVER_READY_BIT) {
                 cJSON *json = cJSON_CreateObject();
@@ -247,20 +207,19 @@ void screen_manage_task(void *pvParameter)
     lv_obj_t * picture = lv_img_create(lv_scr_act());
     while (1) {
         EventBits_t bits = xEventGroupWaitBits(app_event_group,
-                        CAMERA_DATA_BIT | CONNECT_CAMERA_BIT,
+                        CAMERA_READY_BIT,
                         pdFALSE, pdFALSE, portMAX_DELAY);
 
-        if (bits & CONNECT_CAMERA_BIT) {
+        if (bits & CAMERA_READY_BIT) {
             lv_label_set_text(label, "Picture");
-            xEventGroupClearBits(app_event_group, CONNECT_CAMERA_BIT);
+            xEventGroupClearBits(app_event_group, CAMERA_READY_BIT);
         } 
-        if (bits & CAMERA_DATA_BIT) {
-            // esp_log_buffer_hex(TAG, image_buffer, 10);
-            lv_img_set_src(picture, &image);
-            lv_obj_center(picture);
+        // if (bits & CAMERA_DATA_BIT) {
+        //     lv_img_set_src(picture, &image);
+        //     lv_obj_center(picture);
             
-            xEventGroupClearBits(app_event_group, CAMERA_DATA_BIT);
-        }
+        //     xEventGroupClearBits(app_event_group, CAMERA_DATA_BIT);
+        // }
         
         vTaskDelay(pdMS_TO_TICKS(100));
 
@@ -281,10 +240,14 @@ void app_main()
     }
     ESP_ERROR_CHECK(ret);
 
+    /* rgb light */
     rgb_light_init();
+
+    /* lvgl init */
     lv_init();
     lv_port_disp_init();
 
+    /* wifi sta */
     wifi_account_config_t wifi_config = {
         .ssid = WIFI_AP_SSID,
         .password = WIFI_AP_PAS,
@@ -313,18 +276,32 @@ void app_main()
         return;
     }
     
+    /* create tcp client */
     socket_clinet_config_t client_config = {
         .server_ip = SOFTAP_SERVER_IP,
         .server_port = SOFTAP_TCP_PORT,
         .way = WAY_TCP,
         .mark = SOFTAP_SERVER_MRAK,
     };
-    create_socket_wrapper_client(&client_config);
-    create_socket_client_recover_service();
-
+    /* client register callback */
     tcp_client_register_callback(tcp_socket_recv_callback);
     socket_connect_register_callback(tcp_socket_connect_callback);
+    
+    create_socket_wrapper_client(&client_config);
+    create_socket_client_recover_service();
+    
 
+    /* OTA Service */
+    ota_service_config_t ota_config = {
+        .url = APP_OTA_URL,
+        .mode = OTA_AUTOMATIC,
+        .interval = 120000,
+    };
+    http_ota_service_config(&ota_config);
+    http_ota_service_start();
+
+
+    /* app task */
     xTaskCreatePinnedToCore(tcp_sock_handle_task, "tcp_sock_handle_task", 8 * 1024, NULL, 15, NULL, APP_CPU_NUM);
 
     xTaskCreatePinnedToCore(screen_manage_task, "screen_manage_task", 4096, NULL, 4, NULL, APP_CPU_NUM);
